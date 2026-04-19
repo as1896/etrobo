@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#
+# safe_sim_up
+#   Clean up stale simulator processes, then run `make app=<name> sim up`.
+#
+# Usage:
+#   safe_sim_up [project_name] [left|right]
+#
+set -euo pipefail
+
+project_name="${1:-}"
+course="${2:-}"
+
+if [ -z "$project_name" ]; then
+    if [ -f "$(pwd)/workspace/currentapp" ]; then
+        currentapp=$(head -n 1 "$(pwd)/workspace/currentapp")
+        project_name="$(echo "$currentapp" | sed -E 's/^app=|img=(.*)$/\1/')"
+    else
+        project_name="sample_c5_study"
+    fi
+fi
+
+if [ -n "$course" ] && [ "$course" != "left" ] && [ "$course" != "right" ] && [ "$course" != "l" ] && [ "$course" != "r" ]; then
+    echo "[safe_sim_up] invalid course: $course"
+    echo "usage: safe_sim_up [project_name] [left|right]"
+    exit 2
+fi
+
+if [ -n "${ETROBO_ROOT:-}" ]; then
+    root="$ETROBO_ROOT"
+else
+    root="$(cd "$(dirname "$0")/.." && pwd)"
+fi
+
+cd "$root"
+
+echo "[safe_sim_up] root=$root"
+echo "[safe_sim_up] project=$project_name"
+if [ -n "$course" ]; then
+    echo "[safe_sim_up] course=$course"
+fi
+
+echo "[safe_sim_up] stopping simulator/apps"
+sim stop >/dev/null 2>&1 || true
+sim stop apps >/dev/null 2>&1 || true
+asp stop >/dev/null 2>&1 || true
+sleep 1
+
+# Kill stale simulator-side processes that sometimes survive stop commands.
+pids=$(ps -u "$(id -u)" -o pid= -o args= | awk '/scripts\/athrill_runner|\/athrill2( |$)|etrobosim/ {print $1}')
+if [ -n "$pids" ]; then
+    echo "[safe_sim_up] terminating stale processes: $pids"
+    kill $pids >/dev/null 2>&1 || true
+    sleep 1
+fi
+
+leftovers=$(ps -u "$(id -u)" -o pid= -o args= | awk '/scripts\/athrill_runner|\/athrill2( |$)|etrobosim/ {print $1}')
+if [ -n "$leftovers" ]; then
+    echo "[safe_sim_up] force-killing leftovers: $leftovers"
+    kill -9 $leftovers >/dev/null 2>&1 || true
+    sleep 1
+fi
+
+# If ports are still occupied, print diagnostics.
+if ss -lunp | grep -E ':(54000|54001|54002|54003|54004)\b' >/dev/null 2>&1; then
+    echo "[safe_sim_up] warning: simulator UDP ports are still occupied"
+    ss -lunp | grep -E ':(54000|54001|54002|54003|54004)\b' || true
+fi
+
+cmd=(make)
+if [ -n "$course" ]; then
+    cmd+=("$course")
+fi
+cmd+=("app=$project_name" "sim" "up")
+
+echo "[safe_sim_up] running: ${cmd[*]}"
+"${cmd[@]}"
